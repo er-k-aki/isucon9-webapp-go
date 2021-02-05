@@ -22,7 +22,7 @@ import (
 	"goji.io/pat"
 	"golang.org/x/crypto/bcrypt"
 )
-// hello world
+
 const (
 	sessionName = "session_isucari"
 
@@ -867,37 +867,45 @@ func getTransactions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	//tx := dbx.MustBegin()
-	//items := []Item{}
+	tx := dbx.MustBegin()
+	// items := []Item{}
 	var rows *sqlx.Rows
-	// 作成日とidでアイテムを検索
 	if itemID > 0 && createdAt > 0 {
+		// paging
 		rows, err = dbx.Queryx(
-			`SELECT items.id,
-       items.seller_id,
-       items.status,
-       items.name,
-       items.description,
-       items.image_name,
-       items.category_id,
-       items.created_at,
-       items.buyer_id,
-       te_ship.id     as te_id,
-       te_ship.reserve_id,
-       te_ship.status as te_status
-FROM items
-         LEFT JOIN
-     (SELECT te.id,
-             te.status
-      FROM transaction_evidences te
-               RIGHT JOIN
-           shippings s
-           ON te.id = s.transaction_evidence_id
-     ) te_ship ON te_ship.item_id = items.id
-WHERE (seller_id = ? OR buyer_id = ?)
-  AND (created_at < ?  OR (created_at <= ? AND items.id < ?))
-ORDER BY created_at DESC, items.id DESC
-LIMIT ?`,
+			`SELECT 
+	items.id, 
+	items.seller_id, 
+	items.status,
+	items.name,
+	items.description,
+	items.image_name,
+	items.category_id,
+	items.created_at,
+	items.buyer_id,
+	te_ship.id as te_id,
+	te_ship.reserve_id,
+	te_ship.status as te_status
+FROM 
+	items 
+LEFT JOIN 
+	(
+		SELECT 
+			transaction_evidences.id,
+			transaction_evidences.item_id, 
+			transaction_evidences.status, 
+			shippings.reserve_id  
+		FROM 
+			transaction_evidences 
+		RIGHT JOIN 
+			shippings 
+		ON transaction_evidences.id = shippings.transaction_evidence_id
+	) AS te_ship ON items.id = te_ship.item_id 
+WHERE 
+	(seller_id = ? OR buyer_id = ?) 
+	AND (created_at < ?  OR (created_at <= ? AND items.id < ?)) 
+ORDER BY 
+	created_at DESC, items.id DESC LIMIT ?`,
 			user.ID,
 			user.ID,
 			time.Unix(createdAt, 0),
@@ -905,68 +913,58 @@ LIMIT ?`,
 			itemID,
 			TransactionsPerPage+1,
 		)
-		//// paging
-		//err := tx.Select(&items,
-		//	"SELECT * FROM `items` WHERE (`seller_id` = ? OR `buyer_id` = ?) AND (`created_at` < ?  OR (`created_at` <= ? AND `id` < ?)) ORDER BY `created_at` DESC, `id` DESC LIMIT ?",
-		//	user.ID,
-		//	user.ID,
-		//	time.Unix(createdAt, 0),
-		//	time.Unix(createdAt, 0),
-		//	itemID,
-		//	TransactionsPerPage+1,
-		//)
 		if err != nil {
 			log.Print(err)
 			outputErrorMsg(w, http.StatusInternalServerError, "db error")
-			//dbx.Rollback()
+			tx.Rollback()
 			return
 		}
 	} else {
+		// 1st page
 		rows, err = dbx.Queryx(
-			`SELECT items.id,
-       items.seller_id,
-       items.status,
-       items.name,
-       items.description,
-       items.image_name,
-       items.category_id,
-       items.created_at,
-       items.buyer_id,
-       te_ship.id     as te_id,
-       te_ship.reserve_id,
-       te_ship.status as te_status
-FROM items
-         LEFT JOIN
-     (SELECT te.id,
-             te.status
-      FROM transaction_evidences te
-               RIGHT JOIN
-           shippings s
-           ON te.id = s.transaction_evidence_id
-     ) te_ship ON te_ship.item_id = items.id
-WHERE (seller_id = ? OR buyer_id = ?)
-ORDER BY created_at DESC, items.id DESC
-LIMIT ?`, user.ID,
+			`SELECT 
+	items.id, 
+	items.seller_id, 
+	items.status,
+	items.name,
+	items.description,
+	items.image_name,
+	items.category_id,
+	items.created_at,
+	items.buyer_id,
+	te_ship.id as te_id,
+	te_ship.reserve_id,
+	te_ship.status as te_status
+FROM 
+	items 
+LEFT JOIN 
+	(
+		SELECT 
+			transaction_evidences.id,
+			transaction_evidences.item_id, 
+			transaction_evidences.status, 
+			shippings.reserve_id  
+		FROM 
+			transaction_evidences 
+		RIGHT JOIN 
+			shippings 
+		ON transaction_evidences.id = shippings.transaction_evidence_id
+	) AS te_ship ON items.id = te_ship.item_id 
+WHERE 
+	(seller_id = ? OR buyer_id = ?) 
+ORDER BY created_at DESC, items.id DESC LIMIT ?`,
 			user.ID,
-			time.Unix(createdAt, 0),
-			time.Unix(createdAt, 0),
-			itemID,
+			user.ID,
 			TransactionsPerPage+1,
 		)
-		//// 1st page
-		//err := tx.Select(&items,
-		//	"SELECT * FROM `items` WHERE (`seller_id` = ? OR `buyer_id` = ?) ORDER BY `created_at` DESC, `id` DESC LIMIT ?",
-		//	user.ID,
-		//	user.ID,
-		//	TransactionsPerPage+1,
-		//)
 		if err != nil {
 			log.Print(err)
 			outputErrorMsg(w, http.StatusInternalServerError, "db error")
-			//tx.Rollback()
+			tx.Rollback()
 			return
 		}
 	}
+
 	itemDetails := []ItemDetail{}
 	for rows.Next() {
 		item := Item{}
@@ -990,19 +988,20 @@ LIMIT ?`, user.ID,
 		if err != nil {
 			log.Print(err)
 			outputErrorMsg(w, http.StatusInternalServerError, "db error")
+			tx.Rollback()
 			return
 		}
 
-		seller, err := getUserSimpleByID(dbx, item.SellerID)
+		seller, err := getUserSimpleByID(tx, item.SellerID)
 		if err != nil {
 			outputErrorMsg(w, http.StatusNotFound, "seller not found")
-
+			tx.Rollback()
 			return
 		}
-		category, err := getCategoryByID(dbx, item.CategoryID)
+		category, err := getCategoryByID(tx, item.CategoryID)
 		if err != nil {
 			outputErrorMsg(w, http.StatusNotFound, "category not found")
-
+			tx.Rollback()
 			return
 		}
 
@@ -1026,9 +1025,10 @@ LIMIT ?`, user.ID,
 		}
 
 		if item.BuyerID != 0 {
-			buyer, err := getUserSimpleByID(dbx, item.BuyerID)
+			buyer, err := getUserSimpleByID(tx, item.BuyerID)
 			if err != nil {
 				outputErrorMsg(w, http.StatusNotFound, "buyer not found")
+				tx.Rollback()
 				return
 			}
 			itemDetail.BuyerID = item.BuyerID
@@ -1045,6 +1045,7 @@ LIMIT ?`, user.ID,
 			if err != nil {
 				log.Print(err)
 				outputErrorMsg(w, http.StatusInternalServerError, "failed to request to shipment service")
+				tx.Rollback()
 				return
 			}
 
@@ -1056,93 +1057,93 @@ LIMIT ?`, user.ID,
 		itemDetails = append(itemDetails, itemDetail)
 	}
 
-	//itemDetails := []ItemDetail{}
-	//for _, item := range items {
-	//	seller, err := getUserSimpleByID(tx, item.SellerID)
-	//	if err != nil {
-	//		outputErrorMsg(w, http.StatusNotFound, "seller not found")
-	//		tx.Rollback()
-	//		return
-	//	}
-	//	category, err := getCategoryByID(tx, item.CategoryID)
-	//	if err != nil {
-	//		outputErrorMsg(w, http.StatusNotFound, "category not found")
-	//		tx.Rollback()
-	//		return
-	//	}
-	//
-	//	itemDetail := ItemDetail{
-	//		ID:       item.ID,
-	//		SellerID: item.SellerID,
-	//		Seller:   &seller,
-	//		// BuyerID
-	//		// Buyer
-	//		Status:      item.Status,
-	//		Name:        item.Name,
-	//		Price:       item.Price,
-	//		Description: item.Description,
-	//		ImageURL:    getImageURL(item.ImageName),
-	//		CategoryID:  item.CategoryID,
-	//		// TransactionEvidenceID
-	//		// TransactionEvidenceStatus
-	//		// ShippingStatus
-	//		Category:  &category,
-	//		CreatedAt: item.CreatedAt.Unix(),
-	//	}
-	//
-	//	if item.BuyerID != 0 {
-	//		buyer, err := getUserSimpleByID(tx, item.BuyerID)
-	//		if err != nil {
-	//			outputErrorMsg(w, http.StatusNotFound, "buyer not found")
-	//			tx.Rollback()
-	//			return
-	//		}
-	//		itemDetail.BuyerID = item.BuyerID
-	//		itemDetail.Buyer = &buyer
-	//	}
-	//
-	//	transactionEvidence := TransactionEvidence{}
-	//	err = tx.Get(&transactionEvidence, "SELECT * FROM `transaction_evidences` WHERE `item_id` = ?", item.ID)
-	//	if err != nil && err != sql.ErrNoRows {
-	//		// It's able to ignore ErrNoRows
-	//		log.Print(err)
-	//		outputErrorMsg(w, http.StatusInternalServerError, "db error")
-	//		tx.Rollback()
-	//		return
-	//	}
-	//
-	//	if transactionEvidence.ID > 0 {
-	//		shipping := Shipping{}
-	//		err = tx.Get(&shipping, "SELECT * FROM `shippings` WHERE `transaction_evidence_id` = ?", transactionEvidence.ID)
-	//		if err == sql.ErrNoRows {
-	//			outputErrorMsg(w, http.StatusNotFound, "shipping not found")
-	//			tx.Rollback()
-	//			return
-	//		}
-	//		if err != nil {
-	//			log.Print(err)
-	//			outputErrorMsg(w, http.StatusInternalServerError, "db error")
-	//			tx.Rollback()
-	//			return
-	//		}
-	//		ssr, err := APIShipmentStatus(getShipmentServiceURL(), &APIShipmentStatusReq{
-	//			ReserveID: shipping.ReserveID,
-	//		})
-	//		if err != nil {
-	//			log.Print(err)
-	//			outputErrorMsg(w, http.StatusInternalServerError, "failed to request to shipment service")
-	//			tx.Rollback()
-	//			return
-	//		}
-	//
-	//		itemDetail.TransactionEvidenceID = transactionEvidence.ID
-	//		itemDetail.TransactionEvidenceStatus = transactionEvidence.Status
-	//		itemDetail.ShippingStatus = ssr.Status
-	//	}
-	//
-	//	itemDetails = append(itemDetails, itemDetail)
-	//}
-	//tx.Commit()
+	// itemDetails := []ItemDetail{}
+	// for _, item := range items {
+	// 	seller, err := getUserSimpleByID(tx, item.SellerID)
+	// 	if err != nil {
+	// 		outputErrorMsg(w, http.StatusNotFound, "seller not found")
+	// 		tx.Rollback()
+	// 		return
+	// 	}
+	// 	category, err := getCategoryByID(tx, item.CategoryID)
+	// 	if err != nil {
+	// 		outputErrorMsg(w, http.StatusNotFound, "category not found")
+	// 		tx.Rollback()
+	// 		return
+	// 	}
+
+	// 	itemDetail := ItemDetail{
+	// 		ID:       item.ID,
+	// 		SellerID: item.SellerID,
+	// 		Seller:   &seller,
+	// 		// BuyerID
+	// 		// Buyer
+	// 		Status:      item.Status,
+	// 		Name:        item.Name,
+	// 		Price:       item.Price,
+	// 		Description: item.Description,
+	// 		ImageURL:    getImageURL(item.ImageName),
+	// 		CategoryID:  item.CategoryID,
+	// 		// TransactionEvidenceID
+	// 		// TransactionEvidenceStatus
+	// 		// ShippingStatus
+	// 		Category:  &category,
+	// 		CreatedAt: item.CreatedAt.Unix(),
+	// 	}
+
+	// 	if item.BuyerID != 0 {
+	// 		buyer, err := getUserSimpleByID(tx, item.BuyerID)
+	// 		if err != nil {
+	// 			outputErrorMsg(w, http.StatusNotFound, "buyer not found")
+	// 			tx.Rollback()
+	// 			return
+	// 		}
+	// 		itemDetail.BuyerID = item.BuyerID
+	// 		itemDetail.Buyer = &buyer
+	// 	}
+
+	// 	transactionEvidence := TransactionEvidence{}
+	// 	err = tx.ExecRow(&transactionEvidence, "SELECT * FROM `transaction_evidences` WHERE `item_id` = ?", item.ID)
+	// 	if err != nil && err != sql.ErrNoRows {
+	// 		// It's able to ignore ErrNoRows
+	// 		log.Print(err)
+	// 		outputErrorMsg(w, http.StatusInternalServerError, "db error")
+	// 		tx.Rollback()
+	// 		return
+	// 	}
+
+	// 	if transactionEvidence.ID > 0 {
+	// 		shipping := Shipping{}
+	// 		err = tx.Get(&shipping, "SELECT * FROM `shippings` WHERE `transaction_evidence_id` = ?", transactionEvidence.ID)
+	// 		if err == sql.ErrNoRows {
+	// 			outputErrorMsg(w, http.StatusNotFound, "shipping not found")
+	// 			tx.Rollback()
+	// 			return
+	// 		}
+	// 		if err != nil {
+	// 			log.Print(err)
+	// 			outputErrorMsg(w, http.StatusInternalServerError, "db error")
+	// 			tx.Rollback()
+	// 			return
+	// 		}
+	// 		ssr, err := APIShipmentStatus(getShipmentServiceURL(), &APIShipmentStatusReq{
+	// 			ReserveID: shipping.ReserveID,
+	// 		})
+	// 		if err != nil {
+	// 			log.Print(err)
+	// 			outputErrorMsg(w, http.StatusInternalServerError, "failed to request to shipment service")
+	// 			tx.Rollback()
+	// 			return
+	// 		}
+
+	// 		itemDetail.TransactionEvidenceID = transactionEvidence.ID
+	// 		itemDetail.TransactionEvidenceStatus = transactionEvidence.Status
+	// 		itemDetail.ShippingStatus = ssr.Status
+	// 	}
+
+	// 	itemDetails = append(itemDetails, itemDetail)
+	// }
+	tx.Commit()
 
 	hasNext := false
 	if len(itemDetails) > TransactionsPerPage {
